@@ -35,14 +35,20 @@ spec:
               cpu: 500m
               memory: 768Mi
           readinessProbe:
-            httpGet:
-              path: /actuator/health
-              port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 5
-          livenessProbe:
+            # timeoutSeconds default is 1s: too tight for a Java app on a
+            # slow node / under fault load, and it caused spurious
+            # "Client.Timeout exceeded while awaiting headers" failures
+            # even though /api/orders responded fine.
             httpGet:
               path: /actuator/health
               port: 8080
             initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
