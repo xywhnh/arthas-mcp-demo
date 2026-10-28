@@ -151,6 +151,52 @@ Agent 提问示例：
 本演示故意不做 heapdump：heapdump 会触发 Full GC、文件大，
 生产默认不开放；分享现场讲原理就够了。
 
+## MCP 作为集群内独立服务（推荐：宿主机上不用跑任何东西）
+
+上面说的“在局域网服务器上起一个进程”只是最快的验证办法，不是必须
+的。在你的环境里，所有可用资源都是 k8s 上可部署的，物理机都组成
+了集群，所以正确的形态就是：**MCP 本身也是一个独立的 Deployment +
+Service，跟业务服务平级，不依赖任何一台宿主机上的进程。**
+
+这个版本已经做好了，清单在 `k8s/gzdt/mcp-*.yaml`，全部是现有命名
+空间 `gzdt`，不新建命名空间，不动已有服务：
+
+- `mcp-serviceaccount.yaml`：ServiceAccount `arthas-mcp-server`
+- `mcp-role.yaml`：Role，只给 `pods` 的 get/list 和 `pods/exec` 的
+  create，不能删东西、不能读 Secret、不能改 Deployment/Service
+- `mcp-rolebinding.yaml`：把 Role 绑给上面的 ServiceAccount
+- `mcp-secret.yaml`：Bearer 口令，**上传前必须把里面的
+  `REPLACE-ME-WITH-A-SECRET` 换成你自己的口令**，不要把真口令提交
+  进仓库
+- `mcp-deployment.yaml`：MCP 的 Deployment，镜像是
+  `ghcr.io/xywhnh/arthas-mcp-demo-mcp:0.1.0`（Python + kubectl +
+  MCP 代码的独立镜像，不是业务镜像，业务镜像里没有 Python 和
+  kubectl，所以业务 Pod 里跑不起 MCP）
+- `mcp-service.yaml`：NodePort Service，`nodePort` 不填，集群自动
+  分配一个端口（跟业务服务拿到 32320 是一回事）
+
+为什么 Pod 里的 MCP 不需要 kubeconfig、也不需要宿主机上的 kubectl：
+Pod 启动时，集群会自动把这个 ServiceAccount 的 token 挂载进 Pod，
+Pod 里的 kubectl 会用这个 token 和集群内地址
+（`https://kubernetes.default.svc`）直接连 API Server，权限就是上面
+那个 Role 给的、只限 gzdt 的范围。所以 MCP Pod 一起，诊断通道就
+通了，宿主机上什么都不用跑。
+
+Dashboard 上传顺序就是上面列的 1 到 6，Service 上传完后去服务列表
+里看它被分配的 NodePort，然后在你本机上验：
+
+```bash
+curl -s -H 'Content-Type: application/json' \
+     -H 'Authorization: Bearer <你在 Secret 里填的口令>' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+     http://10.129.73.14:<上面那个 NodePort>/mcp
+# 预期：返回 7 个工具；不带口令返回 401
+```
+
+注意：MCP 镜像是新包，第一次 Publish 之后默认是 private，跟之前业
+务镜像一样，需要你去把它的可见性改成 public，否则 MCP Pod 会
+ImagePullBackOff。MCP 镜像同样是 Docker v2 格式，Publish 里有校验。
+
 ## 通用接 MCP：客户端不需要 kubectl（推荐，演示和团队用这个）
 
 stdio 版只适合 MCP 和 Agent 在同一台机器上、且那台机器上有 kubectl

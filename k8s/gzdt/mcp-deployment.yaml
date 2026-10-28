@@ -1,0 +1,64 @@
+# MCP HTTP server as an independent Deployment in the EXISTING
+# namespace gzdt. It does NOT touch arthas-demo-service or any other
+# workload; it only execs into Pods in gzdt when an Agent calls it.
+# Image: ghcr.io/xywhnh/arthas-mcp-demo-mcp:0.1.0 (Docker v2, public,
+# same as the demo app image; if the package is still private after
+# the first Publish run, make it public or this Pod will ImagePullBackOff).
+# Upload order in Dashboard: 5 of 6, after ServiceAccount/Role/
+# RoleBinding/Secret. imagePullPolicy: Always, because tag 0.1.0 is
+# reused across rebuilds and a cached old image would otherwise win.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arthas-mcp-server
+  namespace: gzdt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: arthas-mcp-server
+  template:
+    metadata:
+      labels:
+        app: arthas-mcp-server
+    spec:
+      serviceAccountName: arthas-mcp-server
+      containers:
+        - name: arthas-mcp-server
+          image: ghcr.io/xywhnh/arthas-mcp-demo-mcp:0.1.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 18080
+          env:
+            - name: ARTHAS_NAMESPACE
+              value: gzdt
+            - name: ARTHAS_ALLOWED_NAMESPACES
+              value: gzdt
+            - name: ARTHAS_APP_LABEL
+              value: arthas-demo-service
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: arthas-mcp-token
+                  key: token
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 18080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 18080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

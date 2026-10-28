@@ -35,6 +35,30 @@ jobs:
       - name: Build Docker image (no push)
         run: docker build -t demo-service:ci apps/demo-service
 
+      - name: Build MCP server image (no push) and test its HTTP server
+        run: |
+          docker build -t arthas-mcp-server:ci -f mcp/Dockerfile .
+          docker run -d --name mcp-ci -p 18099:18080 \
+            -e MCP_AUTH_TOKEN=test-token-123 \
+            -e ARTHAS_NAMESPACE=gzdt -e ARTHAS_ALLOWED_NAMESPACES=gzdt \
+            arthas-mcp-server:ci
+          trap 'docker rm -f mcp-ci >/dev/null 2>&1 || true' EXIT
+          sleep 3
+          curl -fsS http://localhost:18099/health
+          echo
+          # No token must be rejected.
+          if curl -fsS -H 'Content-Type: application/json' \
+               -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+               http://localhost:18099/mcp; then
+            echo "ERROR: /mcp accepted a request without a token" >&2; exit 1
+          fi
+          curl -fsS -H 'Content-Type: application/json' \
+               -H 'Authorization: Bearer test-token-123' \
+               -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+               http://localhost:18099/mcp | python3 -c \
+            "import sys, json; tools = json.load(sys.stdin)['result']['tools']; \
+             assert len(tools) == 7, tools; print('MCP HTTP tools:', [t['name'] for t in tools])"
+
       - name: Create kind cluster
         uses: helm/kind-action@v1
         with:

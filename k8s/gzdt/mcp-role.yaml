@@ -1,0 +1,17 @@
+# Minimal RBAC for the MCP server, gzdt only.
+# It may list/get Pods (to resolve a Pod by app label) and create
+# pods/exec sessions (to run Arthas inside the target Pod). It may NOT
+# delete anything, read Secrets, or modify Deployments/Services.
+# Upload order in Dashboard: 2 of 6.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: arthas-mcp
+  namespace: gzdt
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]

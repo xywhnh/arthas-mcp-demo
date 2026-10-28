@@ -1,0 +1,15 @@
+# Bind the MCP Role to the MCP ServiceAccount, gzdt only.
+# Upload order in Dashboard: 3 of 6.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: arthas-mcp-binding
+  namespace: gzdt
+subjects:
+  - kind: ServiceAccount
+    name: arthas-mcp-server
+    namespace: gzdt
+roleRef:
+  kind: Role
+  name: arthas-mcp
+  apiGroup: rbac.authorization.k8s.io
