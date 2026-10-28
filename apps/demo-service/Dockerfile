@@ -18,20 +18,19 @@
 #    In production, run as the same non-root user as the Java process.
 FROM eclipse-temurin:17-jdk-jammy
 
-# telnet is REQUIRED even though MCP uses as.sh in batch mode (-c):
-# as.sh checks for the telnet binary up front and exits 1 with
-# "Error: telnet is not installed" if it is missing, before it ever
-# attaches -- even though -c itself is then served by arthas-client.jar
-# (Java), not by the telnet binary. This was verified on 4.0.5 and
-# confirmed again on the real service's 4.1.1 as.sh (lines 189 and
-# 202-203: "check curl/grep/awk/telnet/unzip command" and the
-# telnet-missing error). Without it, every Arthas tool
-# (dashboard/jvm/thread/monitor/trace/reset) fails the same way,
-# while list_pods (kubectl only, no as.sh) still works. What is
-# NOT yet confirmed is whether the real container actually has the
-# telnet binary installed -- that is a separate check (command -v).
+# telnet is intentionally NOT installed here, to match the real
+# service container (which has no telnet binary, confirmed) and to
+# prove the MCP path does not need it. as.sh DOES check for the
+# telnet binary up front and exits 1 without it (verified on 4.0.5,
+# confirmed on the real service's 4.1.1 as.sh lines 189, 202-203),
+# but MCP no longer uses as.sh: it runs arthas-client.jar (Java)
+# directly, and attaches with arthas-core.jar (Java) when the
+# agent is not attached yet. Both were proven on the real Pod
+# (client version + dashboard -n 1, no telnet binary present).
+# procps is still needed (pgrep for the Java pid); curl/unzip are
+# needed here only to download and unpack the Arthas package.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl unzip procps telnet \
+ && apt-get install -y --no-install-recommends curl unzip procps \
  && rm -rf /var/lib/apt/lists/*
 
 # Arthas 4.1.1 full package (as.sh inside), at the real service's path.

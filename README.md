@@ -258,7 +258,7 @@ MCP 工具（演示版，刻意收窄）：
 | 工具 | 用途 |
 | --- | --- |
 | arthas_list_pods | 列演示 Pod |
-| arthas_status | 预检：Pod phase/Ready、as.sh（按 `ARTHAS_SEARCH_PATHS` 找）、Java PID（按 `ARTHAS_JAVA_PATTERN` 找）、telnet + `version` 轻量 attach 证明，不跑插桩；诊断失败或演示前先调它 |
+| arthas_status | 预检：Pod phase/Ready、`arthas-client.jar`（按 `ARTHAS_SEARCH_PATHS` 找）、Java PID（按 `ARTHAS_JAVA_PATTERN` 找）+ `version` 轻量 attach 证明，不跑插桩；telnet 缺失只是提示，不阻塞（MCP 不用 `as.sh`）；诊断失败或演示前先调它 |
 | arthas_health_summary | 只读聚合：一次跑 dashboard / jvm / thread，返回堆 / Old 区 / GC 行、线程状态和摘要；单快照不能判泄漏，隔一段时间再调一次、对比堆 / Old 区 |
 | arthas_dashboard / arthas_jvm / arthas_thread | 只读快照 |
 | arthas_monitor | 方法调用量 / 成功率 / 平均耗时（限 5-30 秒） |
@@ -272,7 +272,7 @@ Arthas MCP，所以业务镜像不用为 MCP 另外升级。
 jar 在 `/usr/app/service/app.jar`、Arthas 4.1.1 在
 `/usr/app/tools/arthas`（`as.sh` 就在这一层，跟
 `arthas-boot.jar` 并列）、操作脚本在
-`/usr/app/tools/start-arthas.sh`（MCP 不调它，只用 `as.sh` 批处理）。
+`/usr/app/tools/start-arthas.sh`（MCP 不调它，MCP 直接用 `arthas-client.jar`，agent 没 attach 时用 `arthas-core.jar` attach 后重试，全程 Java，不需要 telnet 二进制）。
 真实服务业务端口是 8088，demo 保持 8080 不变——端口不是 MCP
 的输入（MCP 走 exec，不走业务 HTTP 口），改 demo 端口只会
 牵连所有 k8s 清单和文档，得不偿失。
