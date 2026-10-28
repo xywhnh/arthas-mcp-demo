@@ -18,7 +18,11 @@ spec:
     spec:
       containers:
         - name: demo-service
-          image: demo-service:0.1.0
+          # Published by .github/workflows/publish.yml to GHCR.
+          # If the GHCR package is private, anonymous pulls fail (401);
+          # make the package public, or add an imagePullSecret, before
+          # applying this manifest on a LAN cluster.
+          image: ghcr.io/xywhnh/arthas-mcp-demo:0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
