@@ -1,0 +1,179 @@
+# Arthas MCP 演示环境（Java + 本地 kind）
+
+目标：给团队分享时，能现场演示“本地 Agent → 本地 MCP → Pod 内 Arthas →
+JVM”这条链路，查两个场景：慢接口、Pod 内存上涨。演示用演示命名空间，
+不碰生产。
+
+## 目录结构（mono repo 样子）
+
+```
+arthas-mcp-demo/
+  pom.xml                          # 聚合根
+  apps/demo-service/               # Spring Boot 3.3 + Java 17 演示服务
+    src/main/java/com/example/demo/
+      order/OrderController.java   # GET /api/orders/{id}
+      order/OrderService.java      # 四种模式：normal / self_slow /
+                                   # downstream_slow / nplus1
+      order/DownstreamClient.java  # 模拟下游：getItem / getItemSlow
+      fault/FaultController.java   # 仅演示用开关：/demo/faults/*
+      fault/FaultState.java        # 模式 + 无界缓存（内存泄漏）
+    Dockerfile                     # JDK 17 + Arthas 4.0.5（非 JRE）
+  k8s/                             # namespace / deployment(1 副本) / service
+  scripts/                         # kind-up / build-and-deploy / smoke / arthas
+  mcp/arthas_mcp_server.py         # 最小本地 MCP Server（Python，无外部依赖）
+  mcp/mcp-config.example.json      # Agent 客户端接入示例（改绝对路径后用）
+```
+
+为什么是 1 副本：故障开关是 Pod 内内存状态。1 副本时“开故障前后”
+是确定性的；走 Service 负载均衡到 2 副本时，开关只影响其中一个 Pod，
+演示会忽快忽慢。想做健康 Pod vs 慢 Pod 对照时，扩到 2 副本并分别
+port-forward 两个 Pod，不要走 Service。
+
+## 前置条件（在你自己的机器上）
+
+JDK 17、Maven、Docker、kind、kubectl。首次 attach Arthas 需要联网
+（Arthas 会按 JDK 下载对应核心）。
+
+本仓库是在一台没有 Java / Docker / kubectl 的机器上写的，所以
+**Java 编译、镜像构建、kind 部署这三步在这里没有跑通过**，只做了
+Python MCP 的协议自检和 shell 语法检查。你在自己机器上按下面顺序
+跑，任何一步失败先停在那一步，不要跳到 MCP。
+
+## 快速开始（本地 kind，推荐）
+
+```bash
+scripts/kind-up.sh
+scripts/build-and-deploy.sh
+scripts/smoke.sh
+```
+
+冒烟通过后，先不经过 MCP，直接验证 Arthas 能 attach：
+
+```bash
+scripts/arthas.sh dashboard
+scripts/arthas.sh jvm
+```
+
+## 演示剧本 1：慢接口
+
+先在两个终端准备好：一个持续打流量，一个跑 MCP / Arthas。
+
+```bash
+# 终端 A：持续流量（每 0.5 秒一次）
+while true; do curl -s http://localhost:8080/api/orders/1 >/dev/null; sleep 0.5; done
+```
+
+演示顺序（每步都先让听众猜，再揭证据）：
+
+1. 基线：`GET /api/orders/1`，mode=normal，约 20-50ms。
+2. 开故障（只打到指定 Pod，不要走 Service）：
+   ```bash
+   kubectl -n demo-arthas port-forward pod/<pod> 8081:8080 &
+   curl -X POST 'http://localhost:8081/demo/faults/mode?mode=nplus1'
+   ```
+3. Agent 提问示例：
+   > 查 demo-service 这个接口在慢 Pod 上的调用画像，再 trace
+   > `com.example.demo.order.OrderService getOrder`，拆自身耗时和下游耗时。
+4. 证据对照：
+   - `nplus1`：单次下游不慢，但 trace 里 `getItem` 出现约 50 次。
+   - `downstream_slow`：`getItemSlow` 一次就占大头。
+   - `self_slow`：`getOrder` 自身耗时占大头，下游只有一次且很快。
+5. 结束必做：Agent 调 `arthas_reset`，再 `POST /demo/faults/reset`。
+
+trace 需要流量配合：如果没有终端 A 的持续流量，trace 会一直等
+到 count 满或超时，这是正常的，不要在现场干等。
+
+## 演示剧本 2：Pod 内存上涨
+
+```bash
+# 终端 A：先给 Pod 打一点泄漏（50MB 一次，可重复打）
+kubectl -n demo-arthas port-forward pod/<pod> 8081:8080 &
+curl -X POST 'http://localhost:8081/demo/faults/leak?megabytes=50'
+curl -s http://localhost:8081/demo/faults
+```
+
+Agent 提问示例：
+
+> 连续看这个 Pod 的 dashboard / jvm，判断是堆内泄漏、Metaspace
+> 泄漏、堆外上涨，还是容器配额问题，并给出最可疑的证据。
+
+判断口诀（现场讲，不要只贴数字）：
+
+- Old 区涨、Full GC 后不降 → 对象被长期持有（这里就是无界缓存）。
+- 涨到高水位稳定、GC 频繁但不 OOM → 堆配小或分配速率高。
+- Metaspace 涨 → 动态类 / 类加载器泄漏。
+- 堆稳定但 Pod RSS 涨 → 先看堆外、线程。
+- OOMKilled 但堆没满 → 先核对容器 limit（这里 768Mi）与 Xmx
+  （这里 512m）+ 非堆的配比，别一上来就说是代码泄漏。
+
+本演示故意不做 heapdump：heapdump 会触发 Full GC、文件大，
+生产默认不开放；分享现场讲原理就够了。
+
+## 本地接 MCP（Agent 客户端）
+
+把 `mcp/mcp-config.example.json` 里的绝对路径改成你本机的路径，
+按你所用客户端的 MCP 配置格式粘贴。MCP Server 是 stdio，
+本地跑，不用部署到集群。
+
+MCP 工具（演示版，刻意收窄）：
+
+| 工具 | 用途 |
+| --- | --- |
+| arthas_list_pods | 列演示 Pod |
+| arthas_dashboard / arthas_jvm / arthas_thread | 只读快照 |
+| arthas_monitor | 方法调用量 / 成功率 / 平均耗时（限 5-30 秒） |
+| arthas_trace | 方法调用树（限 1-10 次） |
+| arthas_reset | 清插桩，trace/monitor 后必调 |
+
+没有 ognl、redefine、retransform、heapdump、tt 回放工具，
+这是故意的。命名空间默认只允许 `demo-arthas`，
+环境变量 `ARTHAS_ALLOWED_NAMESPACES` 可以改，但不要改成生产命名空间。
+
+## 如果不用本地 kind，线上 k8s 有哪些选择
+
+先说结论：**演示首选本地 kind**，线上只在“需要给别人一个长期可
+访问的地址”时再考虑。下面是按“能不能真的跑 kubectl exec +
+Arthas attach”来分的，不是按“能不能跑容器”来分的。
+
+### 能直接当 k8s 演示环境的
+
+- **本地 kind / minikube / k3s / Rancher Desktop**：免费、语义最真、
+  kubectl exec 直接可用、随时重建。缺点是只在你本机，分享时要投屏。
+- **Oracle OKE（Always Free）**：你已有 Oracle Cloud 账号，这是最
+  顺的一条线上路。Basic 集群控制面免费，节点可用 Always Free 的
+  Ampere A1 额度；但注意 2026 年 6 月后额度已从 4 OCPU / 24GB
+  减半到约 2 OCPU / 12GB，镜像必须是 arm64 才能跑在 A1 节点上，
+  且闲置实例可能被回收。演示前先确认你的租户还有没有剩余额度。
+- **GKE / AKS 免费层**：控制面约免费或有抵扣（GKE 每月约
+  $74.40 额度可覆盖一个单区集群，AKS Free 层控制面 $0 但无 SLA），
+  但节点、负载均衡、流量还是要钱，演示完记得删集群，别长期挂着。
+  适合“公司已有对应云账号”的情况，不适合只为一次分享新开账号。
+- **临时在线实验场 Killercoda / Play with Kubernetes**：浏览器里
+  就能开临时集群，适合练 kubectl，但会话有时限（通常 1-4 小时量级）、
+  环境会回收、装 Arthas 和自定义镜像比较折腾，**不适合作为正式分享
+  的主环境**，只适合你自己提前练手。
+
+### 不能直接当 k8s 演示环境的（容易踩坑）
+
+- **Railway**：能跑 Dockerfile / 预构建镜像，但它不是 Kubernetes，
+  没有 Pod、没有 kubectl exec、没有命名空间概念。同一份镜像能在
+  Railway 上跑起来，不等于 Arthas MCP 那套“按服务找 Pod 再 exec”
+  能复用。只能用来演示“Java 服务本身”，不能用来演示“k8s 线上排查”。
+- **Cloudflare Workers / Containers**：Workers 本来就不是 Pod 模型；
+  Containers 是按 Worker 驱动的按需容器，没有 kubectl、没有
+  Deployment / Pod 语义，Arthas attach 那条路走不通。同样只能跑
+  服务，不能复现 k8s 排查流程。
+
+一句话：要演示 k8s 排查，就必须真有一个能 `kubectl exec` 的集群；
+Railway、Cloudflare 解决的是“把容器跑起来”，不是“k8s 排查”。
+
+## 彩排前检查单
+
+- [ ] kind 集群、镜像、部署、冒烟、Arthas 直连五步全跑通
+- [ ] 慢接口三种模式的 trace 证据都截过图（nplus1 看次数、
+      downstream_slow 看单次、self_slow 看自身）
+- [ ] 内存泄漏开关能开能关，reset 后 Old 区回落或 Pod 重建后恢复
+- [ ] MCP 配置里的路径、命名空间、kubectl 上下文都改成本机的
+- [ ] 兜底：现场 Arthas 失败时切录好的 trace / dashboard 截图，
+      不要现场排环境
+- [ ] 演示命名空间、故障开关、MCP 工具都没有指向生产

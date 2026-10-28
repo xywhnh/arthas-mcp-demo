@@ -1,0 +1,65 @@
+name: CI
+
+# Build the Java demo, build its Docker image, and smoke-test it on a
+# throwaway kind cluster. This proves the exact artifact a presenter
+# would run locally still builds and starts -- it does NOT deploy to
+# any real cluster and does NOT touch production namespaces.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build demo-service jar
+        run: mvn -B -pl apps/demo-service -am package -DskipTests
+
+      - name: Build Docker image (no push)
+        run: docker build -t demo-service:ci apps/demo-service
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: arthas-demo-ci
+
+      - name: Load image and deploy
+        run: |
+          # The checked-in manifest pins demo-service:0.1.0; retag the CI
+          # image to that tag so the manifest needs no CI-only fork.
+          docker tag demo-service:ci demo-service:0.1.0
+          kind load docker-image demo-service:0.1.0 --name arthas-demo-ci
+          kubectl apply -f k8s/
+          kubectl -n demo-arthas rollout status deployment/demo-service --timeout=180s
+
+      - name: Smoke test (health + normal order + fault reset)
+        run: |
+          kubectl -n demo-arthas port-forward svc/demo-service 8080:8080 >/tmp/pf.log 2>&1 &
+          PF_PID=$!
+          trap 'kill $PF_PID 2>/dev/null || true' EXIT
+          sleep 3
+          curl -fsS http://localhost:8080/actuator/health
+          echo
+          curl -fsS http://localhost:8080/api/orders/1
+          echo
+          curl -fsS http://localhost:8080/demo/faults
+          echo
+          # Leave the cluster clean for the next demo run.
+          kubectl -n demo-arthas get pods
