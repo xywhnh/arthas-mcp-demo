@@ -32,9 +32,9 @@ Design choices, all deliberate for a team demo:
 - arthas_status is a pre-flight check, not a diagnosis: it verifies
   Pod phase/Ready, as.sh (under ARTHAS_SEARCH_PATHS), the Java pid
   (ARTHAS_JAVA_PATTERN) and the telnet binary (an as.sh prerequisite
-  verified on 4.0.5; on 4.1.1 it is kept as a precaution until a
-  real 4.1.1 Pod proves otherwise), plus a lightweight `version`
-  attach probe. It never instruments a method.
+  verified on 4.0.5 and confirmed on the real service's 4.1.1 as.sh,
+  lines 189 and 202-203), plus a lightweight `version` attach
+  probe. It never instruments a method.
 - arthas_health_summary is a read-only composite: one call runs
   dashboard / jvm / thread and returns a structured summary with
   comparable fields. A single snapshot cannot prove a leak; compare
@@ -385,10 +385,11 @@ def _status_text(pod: str, ns: str) -> str:
         )
     if telnet == "MISSING":
         problems.append(
-            "telnet binary missing: as.sh 4.0.5 exits 1 without it, even in "
-            "-c batch mode; on 4.1.1 this is kept as a precaution until a "
-            "real 4.1.1 Pod proves otherwise (if the Pod is still on a "
-            "pre-telnet image, delete it so it pulls the fixed image)"
+            "telnet binary missing: as.sh exits 1 without it, even in "
+            "-c batch mode (verified on 4.0.5, confirmed on the real "
+            "service's 4.1.1 as.sh lines 189 and 202-203; if the Pod "
+            "is still on a pre-telnet image, delete it so it pulls "
+            "the fixed image)"
         )
     version_line = ""
     if not problems or (as_path != "MISSING" and pid != "MISSING" and telnet == "ok"):
