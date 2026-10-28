@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: demo-service
+  name: arthas-demo-service
   # LAN overlay: deploy into the EXISTING gzdt namespace.
   # This file deliberately does NOT create a namespace and does NOT
   # touch any other Deployment/Service in gzdt.
@@ -10,14 +10,14 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: demo-service
+      app: arthas-demo-service
   template:
     metadata:
       labels:
-        app: demo-service
+        app: arthas-demo-service
     spec:
       containers:
-        - name: demo-service
+        - name: arthas-demo-service
           # Published by .github/workflows/publish.yml to GHCR.
           # If the GHCR package is private, anonymous pulls fail (401);
           # make the package public, or add an imagePullSecret, before
