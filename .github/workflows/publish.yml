@@ -12,6 +12,18 @@ name: Publish
 # Visibility: the GHCR package is public (verified 2026-10-28, anonymous
 # manifest fetch returns 200 for amd64+arm64), so LAN nodes pull it
 # anonymously. If it is ever switched back to private, LAN pulls fail.
+#
+# Manifest format (critical for the LAN cluster): the image MUST be
+# Docker v2, not OCI. The LAN runtime rejects OCI manifests with
+# "mediaType in manifest should be 'application/vnd.docker.distribution.
+# manifest.v2+json' not 'application/vnd.oci.image.manifest.v1+json'".
+# Buildx defaults to OCI, and provenance/SBOM attestations are OCI-only
+# and would force the whole index back to OCI, so this job sets
+# oci-mediatypes=false AND provenance/sbom=false, and the verify step
+# below fails the run if the pushed index is not Docker v2.
+# Note CI does NOT catch this: CI builds locally with plain docker build
+# (Docker format) and kind-loads it, so CI can pass while the GHCR
+# (Buildx) image fails on the old LAN runtime.
 on:
   push:
     branches: [main]
@@ -61,7 +73,41 @@ jobs:
           context: apps/demo-service
           file: apps/demo-service/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
+          # push:true is shorthand for --output type=registry and cannot
+          # carry oci-mediatypes=false, so push via outputs instead.
+          outputs: type=image,push=true,oci-mediatypes=false
+          provenance: false
+          sbom: false
           tags: |
             ghcr.io/xywhnh/arthas-mcp-demo:0.1.0
             ghcr.io/xywhnh/arthas-mcp-demo:latest
+
+      - name: Verify pushed manifest is Docker v2 (not OCI)
+        run: |
+          python3 - << 'PY'
+          import json, sys, urllib.request
+          repo = "xywhnh/arthas-mcp-demo"
+          tok = json.load(urllib.request.urlopen(
+              f"https://ghcr.io/token?service=ghcr.io&scope=repository:{repo}:pull"))["token"]
+          def get(url, accept):
+              req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}", "Accept": accept})
+              with urllib.request.urlopen(req) as r:
+                  return r.headers.get("Content-Type", ""), r.read()
+          ct, body = get(f"https://ghcr.io/v2/{repo}/manifests/0.1.0",
+                         "application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json")
+          print("index content-type:", ct)
+          idx = json.loads(body)
+          assert idx.get("mediaType") == "application/vnd.docker.distribution.manifest.list.v2+json", \
+              f"index is not Docker manifest list v2: {idx.get('mediaType')}"
+          plats = [(m["platform"]["architecture"], m["digest"]) for m in idx["manifests"]
+                   if m.get("platform", {}).get("os") == "linux"]
+          assert plats, "no linux platform manifests in index"
+          for arch, digest in plats:
+              ct2, body2 = get(f"https://ghcr.io/v2/{repo}/manifests/{digest}",
+                               "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json")
+              m = json.loads(body2)
+              print(f"{arch} {digest[:19]} mediaType={m.get('mediaType')} content-type={ct2}")
+              assert m.get("mediaType") == "application/vnd.docker.distribution.manifest.v2+json", \
+                  f"{arch} manifest is not Docker v2: {m.get('mediaType')}"
+          print("OK: Docker v2 manifest list + Docker v2 per-arch manifests, no OCI-only index")
+          PY

@@ -68,7 +68,7 @@ scripts/arthas.sh jvm
 
 只传这两个文件，不要传 `k8s/` 下的任何文件，也不要传 `namespace.yaml`：
 
-- `k8s/gzdt/deployment.yaml`（`arthas-demo-service` / `gzdt` / GHCR 镜像）
+- `k8s/gzdt/deployment.yaml`（`arthas-demo-service` / `gzdt` / GHCR 镜像，注意：镜像必须是 Docker v2 格式，局域网旧运行时拒绝 OCI 格式，Publish 流程里已强制 `oci-mediatypes=false` 并关掉 provenance/SBOM，且有发布后格式校验）
 - `k8s/gzdt/service.yaml`（`arthas-demo-service` / `gzdt`）
 
 步骤：Dashboard 左边命名空间先切到 `gzdt` → 确认部署和服务列表里
