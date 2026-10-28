@@ -129,6 +129,23 @@ TOOLS = [
     },
 ]
 
+# Universal (non-stdio-specific) arguments, added to every tool so one MCP
+# server can diagnose any allowed namespace/service, not just the one baked
+# into environment variables at startup. The namespace is allowlist-checked
+# in _call_tool; app_label only selects which pods to look at.
+for _tool in TOOLS:
+    _props = _tool["inputSchema"].setdefault("properties", {})
+    _props.setdefault("namespace", {
+        "type": "string",
+        "description": "Kubernetes namespace to diagnose. Must be in the server allowlist "
+                       "(ARTHAS_ALLOWED_NAMESPACES); defaults to the server default namespace.",
+    })
+    _props.setdefault("app_label", {
+        "type": "string",
+        "description": "Pod label value to select (label key is 'app'). Defaults to the "
+                       "server default (ARTHAS_APP_LABEL).",
+    })
+
 
 def _check_namespace(ns: str) -> None:
     if ns not in ALLOWED:
@@ -170,17 +187,17 @@ def _truncate(text: str) -> str:
     return text
 
 
-def _resolve_pod(pod: str | None, ns: str) -> str:
+def _resolve_pod(pod: str | None, ns: str, app_label: str = APP_LABEL) -> str:
     if pod:
         _check_pod(pod)
         return pod
     out = _run(
-        [KUBECTL, "-n", ns, "get", "pods", "-l", f"app={APP_LABEL}",
+        [KUBECTL, "-n", ns, "get", "pods", "-l", f"app={app_label}",
          "-o", "jsonpath={.items[0].metadata.name}"],
         timeout=30,
     )
     if not out:
-        raise ValueError(f"no pod found with label app={APP_LABEL}")
+        raise ValueError(f"no pod found with label app={app_label} in namespace {ns}")
     return out
 
 
@@ -203,13 +220,17 @@ def _arthas(pod: str, arthas_cmd: str, timeout: int, allow_partial: bool = False
 
 
 def _call_tool(name: str, args: dict) -> str:
-    ns = NAMESPACE
+    # Per-call namespace (allowlist-checked) beats the server default, so
+    # one server is universal across allowed namespaces. app_label only
+    # selects pods; it is not a security boundary.
+    ns = (args.get("namespace") or NAMESPACE).strip()
     _check_namespace(ns)
-    pod = _resolve_pod(args.get("pod"), ns) if name != "arthas_list_pods" else None
+    app_label = (args.get("app_label") or APP_LABEL).strip()
+    pod = _resolve_pod(args.get("pod"), ns, app_label) if name != "arthas_list_pods" else None
 
     if name == "arthas_list_pods":
         out = _run(
-            [KUBECTL, "-n", ns, "get", "pods", "-l", f"app={APP_LABEL}", "-o", "json"],
+            [KUBECTL, "-n", ns, "get", "pods", "-l", f"app={app_label}", "-o", "json"],
             timeout=30,
         )
         data = json.loads(out)
@@ -256,6 +277,45 @@ def _respond(msg_id, result=None, error=None):
     sys.stdout.flush()
 
 
+def handle_request(req: dict):
+    """Handle one JSON-RPC request. Returns a response dict, or None for
+    notifications (no id, no response). Shared by the stdio server and the
+    HTTP server so both transports expose exactly the same tools."""
+    method = req.get("method", "")
+    msg_id = req.get("id")
+    if method.startswith("notifications/"):
+        return None
+    if msg_id is None:
+        return None
+    try:
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {
+                "protocolVersion": req.get("params", {}).get("protocolVersion", PROTOCOL_VERSION),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "arthas-mcp-demo", "version": "0.1.0"},
+            }}
+        if method == "ping":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}}
+        if method == "tools/call":
+            params = req.get("params", {})
+            text = _call_tool(params.get("name", ""), params.get("arguments") or {})
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {
+                "content": [{"type": "text", "text": text}],
+            }}
+        return {"jsonrpc": "2.0", "id": msg_id,
+                "error": {"code": -32601, "message": f"unknown method: {method}"}}
+    except Exception as exc:  # keep the server alive for the next call
+        if method == "tools/call":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {
+                "content": [{"type": "text", "text": f"error: {exc}"}],
+                "isError": True,
+            }}
+        return {"jsonrpc": "2.0", "id": msg_id,
+                "error": {"code": -32603, "message": str(exc)}}
+
+
 def main() -> None:
     for line in sys.stdin:
         line = line.strip()
@@ -265,38 +325,10 @@ def main() -> None:
             req = json.loads(line)
         except json.JSONDecodeError:
             continue
-        method = req.get("method", "")
-        msg_id = req.get("id")
-        # Notifications have no id and need no response.
-        if method.startswith("notifications/"):
-            continue
-        if msg_id is None:
-            continue
-        try:
-            if method == "initialize":
-                _respond(msg_id, {
-                    "protocolVersion": req.get("params", {}).get("protocolVersion", PROTOCOL_VERSION),
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "arthas-mcp-demo", "version": "0.1.0"},
-                })
-            elif method == "ping":
-                _respond(msg_id, {})
-            elif method == "tools/list":
-                _respond(msg_id, {"tools": TOOLS})
-            elif method == "tools/call":
-                params = req.get("params", {})
-                text = _call_tool(params.get("name", ""), params.get("arguments") or {})
-                _respond(msg_id, {"content": [{"type": "text", "text": text}]})
-            else:
-                _respond(msg_id, error={"code": -32601, "message": f"unknown method: {method}"})
-        except Exception as exc:  # keep the server alive for the next call
-            if method == "tools/call":
-                _respond(msg_id, {
-                    "content": [{"type": "text", "text": f"error: {exc}"}],
-                    "isError": True,
-                })
-            else:
-                _respond(msg_id, error={"code": -32603, "message": str(exc)})
+        resp = handle_request(req)
+        if resp is not None:
+            sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":

@@ -151,6 +151,56 @@ Agent 提问示例：
 本演示故意不做 heapdump：heapdump 会触发 Full GC、文件大，
 生产默认不开放；分享现场讲原理就够了。
 
+## 通用接 MCP：客户端不需要 kubectl（推荐，演示和团队用这个）
+
+stdio 版只适合 MCP 和 Agent 在同一台机器上、且那台机器上有 kubectl
+的场景，本机没有 kubectl 的用户用不了，那不是通用 MCP。
+
+通用版是 `mcp/mcp_http_server.py`（Python 标准库，无第三方依赖，
+和 stdio 版共用同一套工具和安全规则）：
+
+- **客户端要求只有一个：能用 HTTP 连到 MCP 服务器。** 不需要 kubectl、
+  不需要 Python、不需要 kubeconfig、不需要本地文件。
+- **服务器端跑在能连集群的机器上**（比如局域网服务器），它内部调
+  kubectl exec 去 Pod 里跑 Arthas，kubectl 只是服务器端的实现细节，
+  客户端完全看不到它。
+- **一个服务器能查多个服务**：每个工具都接受可选的 `namespace`
+ （必须在服务器的 `ARTHAS_ALLOWED_NAMESPACES` 白名单里）和
+  `app_label`（Pod 标签值，键是 `app`），不填就用服务器默认值。
+  所以同一个 MCP 服务器既能查 kind 的 `demo-arthas` / `demo-service`，
+  也能查局域网的 `gzdt` / `arthas-demo-service`，不用为每个服务
+  再起一个 MCP。
+
+在能连集群的机器上（比如局域网服务器）启动：
+
+```bash
+ARTHAS_ALLOWED_NAMESPACES=gzdt ARTHAS_NAMESPACE=gzdt \
+ARTHAS_APP_LABEL=arthas-demo-service MCP_AUTH_TOKEN=<自己设一个口令> \
+python3 mcp/mcp_http_server.py --host 0.0.0.0 --port 18080
+```
+
+然后在任何一台机器上（比如你本机）先用 curl 验一下通不通：
+
+```bash
+curl -s -H 'Content-Type: application/json' \
+     -H 'Authorization: Bearer <上面那个口令>' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+     http://<局域网服务器IP>:18080/mcp
+# 预期：返回 7 个工具 arthas_list_pods / dashboard / jvm / thread /
+# monitor / trace / reset；不带口令应该返回 401
+```
+
+Agent 客户端里配远程 MCP，见 `mcp/mcp-config-remote.example.json`
+（把 URL 里的 IP/端口和口令换成你自己的；不同客户端的远程 MCP
+配置格式略有不同，URL 和 Authorization 头这两个要素是不变的）。
+流量还是走业务的 NodePort（比如 `http://10.129.73.14:32320/...`），
+诊断走这个 MCP HTTP 地址，两条通道分开，客户端机器上全程不需要
+kubectl。
+
+注意：这个 HTTP 服务器本身没有集群外的鉴权之外的保护，务必只放
+在局域网里（防火墙 / NodePort 只对局域网开放），不要裸暴露到公网，
+口令也不要写进仓库。
+
 ## 本地接 MCP（Agent 客户端）
 
 把 `mcp/mcp-config.example.json` 里的绝对路径改成你本机的路径，
