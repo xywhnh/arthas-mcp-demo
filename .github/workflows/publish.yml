@@ -9,13 +9,15 @@ name: Publish
 # Platforms: linux/amd64 and linux/arm64, so both x86 and ARM nodes
 # (e.g. Oracle A1, Apple Silicon kind, ARM LAN nodes) can pull it.
 #
-# Visibility note: the first push creates the GHCR package. If the
-# package ends up private, anonymous pulls from LAN nodes will fail
-# until its visibility is changed to public in the package settings
-# (repo page -> Packages -> arthas-mcp-demo -> Package settings).
+# Visibility: the GHCR package is public (verified 2026-10-28, anonymous
+# manifest fetch returns 200 for amd64+arm64), so LAN nodes pull it
+# anonymously. If it is ever switched back to private, LAN pulls fail.
 on:
   push:
     branches: [main]
+    paths:
+      - apps/demo-service/**
+      - .github/workflows/publish.yml
   workflow_dispatch:
 
 permissions:
@@ -28,10 +30,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"

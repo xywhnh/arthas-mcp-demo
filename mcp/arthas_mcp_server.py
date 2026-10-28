@@ -22,6 +22,8 @@ Design choices, all deliberate for a team demo:
 
 Environment:
   ARTHAS_NAMESPACE           default "demo-arthas"
+  ARTHAS_APP_LABEL           default "demo-service"
+                             (gzdt: "arthas-demo-service")
   ARTHAS_ALLOWED_NAMESPACES  comma list, default "demo-arthas"
   ARTHAS_KUBECTL             default "kubectl"
   ARTHAS_TIMEOUT_SECONDS     default "65" (trace/monitor ceiling)
@@ -40,6 +42,11 @@ PROTOCOL_VERSION = "2024-11-05"
 MAX_CHARS = 8000
 
 NAMESPACE = os.environ.get("ARTHAS_NAMESPACE", "demo-arthas")
+# Pod label to select. kind uses app=demo-service; the LAN gzdt deployment
+# renamed its objects to arthas-demo-service, so its label is
+# app=arthas-demo-service. Set ARTHAS_APP_LABEL accordingly, otherwise
+# list/resolve finds no pod even though the Pod is Running.
+APP_LABEL = os.environ.get("ARTHAS_APP_LABEL", "demo-service")
 ALLOWED = {
     s.strip()
     for s in os.environ.get("ARTHAS_ALLOWED_NAMESPACES", "demo-arthas").split(",")
@@ -55,7 +62,7 @@ METHOD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TOOLS = [
     {
         "name": "arthas_list_pods",
-        "description": "List demo-service pods in the demo namespace (name, phase).",
+        "description": "List demo pods in the demo namespace (name, phase).",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -168,16 +175,16 @@ def _resolve_pod(pod: str | None, ns: str) -> str:
         _check_pod(pod)
         return pod
     out = _run(
-        [KUBECTL, "-n", ns, "get", "pods", "-l", "app=demo-service",
+        [KUBECTL, "-n", ns, "get", "pods", "-l", f"app={APP_LABEL}",
          "-o", "jsonpath={.items[0].metadata.name}"],
         timeout=30,
     )
     if not out:
-        raise ValueError("no demo-service pod found")
+        raise ValueError(f"no pod found with label app={APP_LABEL}")
     return out
 
 
-def _arthas(pod: str, arthas_cmd: str, timeout: int, allow_partial: bool = False) -> str:
+def _arthas(pod: str, arthas_cmd: str, timeout: int, allow_partial: bool = False, ns: str = NAMESPACE) -> str:
     # shlex-quote the Arthas command so a class/method name cannot break
     # out of the -c argument. The inner script finds as.sh and the Java pid.
     import shlex
@@ -190,7 +197,7 @@ def _arthas(pod: str, arthas_cmd: str, timeout: int, allow_partial: bool = False
         f'"$AS" --select "$PID" -c {shlex.quote(arthas_cmd)}'
     )
     return _run(
-        [KUBECTL, "-n", NAMESPACE, "exec", pod, "--", "bash", "-lc", inner],
+        [KUBECTL, "-n", ns, "exec", pod, "--", "bash", "-lc", inner],
         timeout=timeout, allow_partial=allow_partial,
     )
 
@@ -202,7 +209,7 @@ def _call_tool(name: str, args: dict) -> str:
 
     if name == "arthas_list_pods":
         out = _run(
-            [KUBECTL, "-n", ns, "get", "pods", "-l", "app=demo-service", "-o", "json"],
+            [KUBECTL, "-n", ns, "get", "pods", "-l", f"app={APP_LABEL}", "-o", "json"],
             timeout=30,
         )
         data = json.loads(out)
@@ -212,11 +219,11 @@ def _call_tool(name: str, args: dict) -> str:
         ]
         return "\n".join(lines) or "(no pods)"
     if name == "arthas_dashboard":
-        return _arthas(pod, "dashboard -n 1", timeout=60)
+        return _arthas(pod, "dashboard -n 1", timeout=60, ns=ns)
     if name == "arthas_jvm":
-        return _arthas(pod, "jvm", timeout=60)
+        return _arthas(pod, "jvm", timeout=60, ns=ns)
     if name == "arthas_thread":
-        return _arthas(pod, "thread", timeout=60)
+        return _arthas(pod, "thread", timeout=60, ns=ns)
     if name == "arthas_monitor":
         class_name = args["class_name"]
         method = args["method"]
@@ -225,7 +232,7 @@ def _call_tool(name: str, args: dict) -> str:
         seconds = max(5, min(seconds, 30))
         return _arthas(
             pod, f"monitor -c {seconds} {class_name} {method}",
-            timeout=seconds + 15, allow_partial=True,
+            timeout=seconds + 15, allow_partial=True, ns=ns,
         )
     if name == "arthas_trace":
         class_name = args["class_name"]
@@ -233,9 +240,9 @@ def _call_tool(name: str, args: dict) -> str:
         _check_class_method(class_name, method)
         count = int(args.get("count") or 3)
         count = max(1, min(count, 10))
-        return _arthas(pod, f"trace {class_name} {method} -n {count}", timeout=TIMEOUT)
+        return _arthas(pod, f"trace {class_name} {method} -n {count}", timeout=TIMEOUT, ns=ns)
     if name == "arthas_reset":
-        return _arthas(pod, "reset", timeout=30)
+        return _arthas(pod, "reset", timeout=30, ns=ns)
     raise ValueError(f"unknown tool: {name}")
 
 

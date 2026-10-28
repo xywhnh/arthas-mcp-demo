@@ -1,3 +1,6 @@
+# KIND / CI ONLY -- DO NOT upload this file to a LAN or shared cluster.
+# For the LAN gzdt deployment, use k8s/gzdt/deployment.yaml + k8s/gzdt/service.yaml instead
+# (namespace gzdt, object name arthas-demo-service, GHCR image).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

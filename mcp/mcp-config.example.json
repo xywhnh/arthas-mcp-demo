@@ -1,1 +1,22 @@
-{"mcpServers":{"arthas-demo":{"args":["/ABSOLUTE/PATH/TO/arthas-mcp-demo/mcp/arthas_mcp_server.py"],"command":"python3","env":{"ARTHAS_ALLOWED_NAMESPACES":"demo-arthas","ARTHAS_NAMESPACE":"demo-arthas"}}}}
+{
+  "mcpServers": {
+    "arthas-demo-kind": {
+      "command": "python3",
+      "args": ["/ABSOLUTE/PATH/TO/arthas-mcp-demo/mcp/arthas_mcp_server.py"],
+      "env": {
+        "ARTHAS_NAMESPACE": "demo-arthas",
+        "ARTHAS_ALLOWED_NAMESPACES": "demo-arthas",
+        "ARTHAS_APP_LABEL": "demo-service"
+      }
+    },
+    "arthas-demo-gzdt": {
+      "command": "python3",
+      "args": ["/ABSOLUTE/PATH/TO/arthas-mcp-demo/mcp/arthas_mcp_server.py"],
+      "env": {
+        "ARTHAS_NAMESPACE": "gzdt",
+        "ARTHAS_ALLOWED_NAMESPACES": "gzdt",
+        "ARTHAS_APP_LABEL": "arthas-demo-service"
+      }
+    }
+  }
+}

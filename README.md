@@ -4,6 +4,16 @@
 JVM”这条链路，查两个场景：慢接口、Pod 内存上涨。演示用演示命名空间，
 不碰生产。
 
+## 两条部署路径，不要拿错文件（上次就是在这里拿错的）
+
+| 路径 | 用途 | 命名空间 | 对象名 | 镜像 |
+| --- | --- | --- | --- | --- |
+| `k8s/namespace.yaml` + `k8s/deployment.yaml` + `k8s/service.yaml` | 本地 kind / CI 一次性集群 | `demo-arthas` | `demo-service` | 本地 `demo-service:0.1.0`（kind load） |
+| `k8s/gzdt/deployment.yaml` + `k8s/gzdt/service.yaml` | 局域网 / 共享集群 | 已有 `gzdt`，不新建 | `arthas-demo-service` | GHCR `ghcr.io/xywhnh/arthas-mcp-demo:0.1.0`（公开可拉） |
+
+`k8s/` 下的文件头都标了 `KIND / CI ONLY`，不要上传到局域网集群；
+`k8s/gzdt/` 里只有 Deployment + Service，没有 namespace 文件。
+
 ## 目录结构（mono repo 样子）
 
 ```
@@ -34,9 +44,9 @@ port-forward 两个 Pod，不要走 Service。
 JDK 17、Maven、Docker、kind、kubectl。首次 attach Arthas 需要联网
 （Arthas 会按 JDK 下载对应核心）。
 
-本仓库是在一台没有 Java / Docker / kubectl 的机器上写的，所以
-**Java 编译、镜像构建、kind 部署这三步在这里没有跑通过**，只做了
-Python MCP 的协议自检和 shell 语法检查。你在自己机器上按下面顺序
+Java 编译、镜像构建、kind 部署、GHCR 发布这四步已由 GitHub Actions
+反复验证通过（CI 在 kind 上跑通健康检查、订单接口、故障开关；
+Publish 把 amd64 + arm64 镜像推到公开 GHCR）。本地机器上按下面顺序
 跑，任何一步失败先停在那一步，不要跳到 MCP。
 
 ## 快速开始（本地 kind，推荐）
@@ -53,6 +63,38 @@ scripts/smoke.sh
 scripts/arthas.sh dashboard
 scripts/arthas.sh jvm
 ```
+
+## 局域网 gzdt 部署（Dashboard 上传 YAML）
+
+只传这两个文件，不要传 `k8s/` 下的任何文件，也不要传 `namespace.yaml`：
+
+- `k8s/gzdt/deployment.yaml`（`arthas-demo-service` / `gzdt` / GHCR 镜像）
+- `k8s/gzdt/service.yaml`（`arthas-demo-service` / `gzdt`）
+
+步骤：Dashboard 左边命名空间先切到 `gzdt` → 确认部署和服务列表里
+还没有 `arthas-demo-service` → 右上角 **+ 创建**，上传 YAML，先传
+deployment 再传 service → 部署列表里看 Pod 是不是 1/1 Running。
+
+验证（局域网机器终端，用你自己的 kubeconfig）：
+
+```bash
+kubectl -n gzdt rollout status deployment/arthas-demo-service --timeout=180s
+kubectl -n gzdt port-forward svc/arthas-demo-service 8080:8080 &
+curl -s http://localhost:8080/actuator/health; echo
+curl -s http://localhost:8080/api/orders/1; echo
+```
+
+gzdt 下的 Arthas / MCP 也要跟着改环境变量，否则 MCP 按 kind 的
+标签找不到 Pod：
+
+```bash
+NS=gzdt APP_LABEL=arthas-demo-service scripts/arthas.sh dashboard
+NS=gzdt SVC=arthas-demo-service scripts/smoke.sh
+```
+
+MCP 配置用 `mcp/mcp-config.example.json` 里的 `arthas-demo-gzdt`
+那一项（`ARTHAS_NAMESPACE=gzdt`、`ARTHAS_ALLOWED_NAMESPACES=gzdt`、
+`ARTHAS_APP_LABEL=arthas-demo-service`），不要用 kind 那一项。
 
 ## 演示剧本 1：慢接口
 
@@ -126,7 +168,9 @@ MCP 工具（演示版，刻意收窄）：
 | arthas_reset | 清插桩，trace/monitor 后必调 |
 
 没有 ognl、redefine、retransform、heapdump、tt 回放工具，
-这是故意的。命名空间默认只允许 `demo-arthas`，
+这是故意的。kind 默认只允许 `demo-arthas`（标签 `app=demo-service`）；
+gzdt 用配置里的 `arthas-demo-gzdt` 一项（命名空间 `gzdt`、
+标签 `app=arthas-demo-service`）。
 环境变量 `ARTHAS_ALLOWED_NAMESPACES` 可以改，但不要改成生产命名空间。
 
 ## 如果不用本地 kind，线上 k8s 有哪些选择
@@ -170,6 +214,7 @@ Railway、Cloudflare 解决的是“把容器跑起来”，不是“k8s 排查�
 ## 彩排前检查单
 
 - [ ] kind 集群、镜像、部署、冒烟、Arthas 直连五步全跑通
+- [ ] gzdt 部署用的是 `k8s/gzdt/` 两个文件，不是 `k8s/` 的 kind 文件
 - [ ] 慢接口三种模式的 trace 证据都截过图（nplus1 看次数、
       downstream_slow 看单次、self_slow 看自身）
 - [ ] 内存泄漏开关能开能关，reset 后 Old 区回落或 Pod 重建后恢复

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Build the Java app, build the image, load it into kind, deploy to k8s.
+# KIND ONLY -- do NOT run this against gzdt or any shared cluster.
+# It applies k8s/namespace.yaml + k8s/deployment.yaml (demo-arthas).
+# For gzdt, upload k8s/gzdt/deployment.yaml + k8s/gzdt/service.yaml instead.
 # Run from the repo root (arthas-mcp-demo/).
 set -euo pipefail
 cd "$(dirname "$0")/.."

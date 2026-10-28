@@ -18,12 +18,13 @@ spec:
     spec:
       containers:
         - name: arthas-demo-service
-          # Published by .github/workflows/publish.yml to GHCR.
-          # If the GHCR package is private, anonymous pulls fail (401);
-          # make the package public, or add an imagePullSecret, before
-          # applying this manifest on a LAN cluster.
+          # Published by .github/workflows/publish.yml to GHCR (tag 0.1.0
+          # is rebuilt on every Publish, so Always pull: otherwise a node
+          # that cached an older 0.1.0 would keep running the old image).
+          # The GHCR package is public (verified 2026-10-28), so LAN nodes
+          # pull it anonymously; no imagePullSecret is needed.
           image: ghcr.io/xywhnh/arthas-mcp-demo:0.1.0
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
           resources:
