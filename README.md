@@ -258,7 +258,7 @@ MCP 工具（演示版，刻意收窄）：
 | 工具 | 用途 |
 | --- | --- |
 | arthas_list_pods | 列演示 Pod |
-| arthas_status | 预检：Pod phase/Ready、`arthas-client.jar`（按 `ARTHAS_SEARCH_PATHS` 找）、Java PID（按 `ARTHAS_JAVA_PATTERN` 找）+ `version` 轻量 attach 证明，不跑插桩；telnet 缺失只是提示，不阻塞（MCP 不用 `as.sh`）；诊断失败或演示前先调它 |
+| arthas_status | 预检：Pod phase/Ready、`arthas-client.jar`（按 `ARTHAS_SEARCH_PATHS` 找）、Java PID（按 `ARTHAS_JAVA_PATTERN` 找）+ `version` 轻量 attach 证明，不跑插桩，不查 `as.sh`、不查 telnet；诊断失败或演示前先调它 |
 | arthas_health_summary | 只读聚合：一次跑 dashboard / jvm / thread，返回堆 / Old 区 / GC 行、线程状态和摘要；单快照不能判泄漏，隔一段时间再调一次、对比堆 / Old 区 |
 | arthas_dashboard / arthas_jvm / arthas_thread | 只读快照 |
 | arthas_monitor | 方法调用量 / 成功率 / 平均耗时（限 5-30 秒） |

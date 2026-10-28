@@ -119,17 +119,6 @@ SEARCH_PATHS = [
 JAVA_PATTERN = os.environ.get("ARTHAS_JAVA_PATTERN", "app.jar").strip() or "app.jar"
 
 
-def _find_as() -> str:
-    """Shell fragment: find the first as.sh under SEARCH_PATHS.
-
-    Paths and the Java pattern are shlex-quoted here, so an
-    operator-set value cannot break out of the inner bash command.
-    """
-    import shlex
-
-    quoted = " ".join(shlex.quote(p) for p in SEARCH_PATHS)
-    return f"AS=$(find {quoted} -name as.sh -type f 2>/dev/null | head -n 1); "
-
 POD_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 CLASS_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_\.]*$")
 METHOD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -414,25 +403,21 @@ def _pod_info(pod: str, ns: str) -> dict:
 
 
 def _preflight(pod: str, ns: str) -> dict:
-    """Check client/core/agent jars / Java pid / telnet inside the Pod.
+    """Check arthas-client.jar / Java pid / bash inside the Pod.
 
     The inner script always exits 0 and prints KEY=VALUE lines, so a
     missing tool is reported as a field, not as a kubectl failure.
-    telnet is reported here only as a diagnostic for the old as.sh
-    path; the MCP client path does not need it at all.
+    as.sh and telnet are deliberately NOT checked here: MCP does
+    not use as.sh, so neither is an MCP dependency.
     """
     import shlex
 
     quoted = " ".join(shlex.quote(p) for p in SEARCH_PATHS)
     inner = (
-        _find_as()
-        + 'echo "as.sh=${AS:-MISSING}"; '
         f"CJ=$(find {quoted} -name arthas-client.jar -type f 2>/dev/null | head -n 1); "
         'echo "client_jar=${CJ:-MISSING}"; '
         f'PID=$(pgrep -f {shlex.quote(JAVA_PATTERN)} | head -n 1); '
         'echo "pid=${PID:-MISSING}"; '
-        'if command -v telnet >/dev/null 2>&1; then echo "telnet=ok"; '
-        'else echo "telnet=MISSING"; fi; '
         'if command -v bash >/dev/null 2>&1; then echo "bash=ok"; '
         'else echo "bash=MISSING"; fi'
     )
@@ -461,12 +446,9 @@ def _extract_version(text: str) -> str:
 def _status_text(pod: str, ns: str) -> str:
     info = _pod_info(pod, ns)
     pre = _preflight(pod, ns)
-    as_path = pre.get("as.sh", "MISSING")
     client_jar = pre.get("client_jar", "MISSING")
     pid = pre.get("pid", "MISSING")
-    telnet = pre.get("telnet", "MISSING")
     problems = []
-    warnings = []
     if info["phase"] != "Running":
         problems.append(f"Pod phase is {info['phase']}, not Running")
     if client_jar == "MISSING":
@@ -477,16 +459,6 @@ def _status_text(pod: str, ns: str) -> str:
     if pid == "MISSING":
         problems.append(
             f"Java pid not found (no process matching {JAVA_PATTERN!r} in this Pod)"
-        )
-    if telnet == "MISSING":
-        # Advisory only since the client-path change: MCP no longer
-        # uses as.sh, so a missing telnet binary does not block
-        # diagnosis. It only matters if someone still runs as.sh
-        # by hand (as.sh 4.1.1 lines 189, 202-203 still check it).
-        warnings.append(
-            "telnet binary missing (advisory only: MCP uses "
-            "arthas-client.jar, not as.sh, so this does not block "
-            "diagnosis; as.sh by hand would still fail on it)"
         )
     version_line = ""
     if not problems:
@@ -509,16 +481,11 @@ def _status_text(pod: str, ns: str) -> str:
         f"namespace: {ns}",
         f"phase: {info['phase']}",
         f"ready: {info['ready']}",
-        f"as.sh: {as_path}",
         f"client_jar: {client_jar}",
         f"java_pid: {pid}",
-        f"telnet: {telnet}",
         f"arthas_version: {version_line or '(attach probe not run or failed)'}",
         f"status: {'ok - ready to diagnose' if not problems else 'blocked'}",
     ]
-    if warnings:
-        lines.append("warnings:")
-        lines.extend(f"- {w}" for w in warnings)
     if problems:
         lines.append("problems:")
         lines.extend(f"- {p}" for p in problems)
