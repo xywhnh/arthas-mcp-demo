@@ -7,8 +7,10 @@
 #
 # This script is for a human operator in the Pod console, the same way
 # the real service uses it. The MCP server does NOT call this script:
-# it uses as.sh in batch mode (-c) directly, so it works whether or
-# not Arthas was started by this script first.
+# it runs arthas-client.jar directly (and attaches with arthas-core.jar
+# if the agent is not attached yet), so it works whether or not
+# Arthas was started by this script first, and it does not need the
+# system telnet binary that as.sh checks for.
 JAVA_TOOL_OPTIONS=""
 mkdir -p /usr/app/.arthas/lib/4.1.1
 

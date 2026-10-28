@@ -47,11 +47,10 @@ Design choices, all deliberate for a team demo:
   Arthas command line. There is intentionally NO ognl / redefine /
   retransform / heapdump / tt tool here.
 - arthas_status is a pre-flight check, not a diagnosis: it verifies
-  Pod phase/Ready, as.sh (under ARTHAS_SEARCH_PATHS), the Java pid
-  (ARTHAS_JAVA_PATTERN) and the telnet binary (an as.sh prerequisite
-  verified on 4.0.5 and confirmed on the real service's 4.1.1 as.sh,
-  lines 189 and 202-203), plus a lightweight `version` attach
-  probe. It never instruments a method.
+  Pod phase/Ready, arthas-client.jar (under ARTHAS_SEARCH_PATHS)
+  and the Java pid (ARTHAS_JAVA_PATTERN), plus a lightweight
+  `version` attach probe. Telnet is advisory only here: MCP does
+  not use as.sh. It never instruments a method.
 - arthas_health_summary is a read-only composite: one call runs
   dashboard / jvm / thread and returns a structured summary with
   comparable fields. A single snapshot cannot prove a leak; compare
@@ -81,7 +80,8 @@ Environment:
                              Agent argument)
 
 Before blaming this server, run scripts/arthas.sh by hand. If that fails,
-fix Arthas attach first -- this server uses the same as.sh batch pattern.
+fix Arthas attach first -- this server uses the same arthas-client.jar
+pattern as that script.
 """
 
 import json
