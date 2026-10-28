@@ -17,7 +17,7 @@ Client requirements: an MCP client that can talk to a remote MCP server
 over HTTP, plus the server URL (and a Bearer token, if MCP_AUTH_TOKEN
 is set on the server). Nothing else. The server still enforces the
 same safety rules as the stdio server: namespace allowlist
-(ARTHAS_ALLOWED_NAMESPACES), the same 7 tools only (no ognl /
+(ARTHAS_ALLOWED_NAMESPACES), the same 9 tools only (no ognl /
 redefine / retransform / heapdump / tt), monitor/trace time-boxed,
 output truncated to 8,000 chars.
 

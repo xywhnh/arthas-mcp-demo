@@ -57,7 +57,7 @@ jobs:
                -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
                http://localhost:18099/mcp | python3 -c \
             "import sys, json; tools = json.load(sys.stdin)['result']['tools']; \
-             assert len(tools) == 7, tools; print('MCP HTTP tools:', [t['name'] for t in tools])"
+             assert len(tools) == 9, tools; print('MCP HTTP tools:', [t['name'] for t in tools])"
 
       - name: Create kind cluster
         uses: helm/kind-action@v1

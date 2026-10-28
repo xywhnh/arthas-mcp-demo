@@ -9,12 +9,25 @@ notifications/initialized, tools/list, tools/call.
 Design choices, all deliberate for a team demo:
 - Batch exec only: `kubectl exec <pod> -- bash -lc 'as.sh --select <pid> -c ...'`.
   No long-lived telnet / tunnel session to babysit.
+- Compatible with the Arthas already baked into the business image
+  (4.0.5): the only Arthas commands used are version / dashboard /
+  jvm / thread / monitor / trace / reset, all present in 4.0.5. The
+  server does NOT depend on the official (experimental, post-4.0.5)
+  Arthas MCP endpoint, so no Arthas upgrade is needed to use it.
 - Allowlist: only namespaces in ARTHAS_ALLOWED_NAMESPACES (default:
   demo-arthas). Anything else is rejected before kubectl runs.
 - Intent-level tools, not raw Arthas passthrough: the Agent asks for
   "dashboard" / "monitor OrderService.getOrder", not for an arbitrary
   Arthas command line. There is intentionally NO ognl / redefine /
   retransform / heapdump / tt tool here.
+- arthas_status is a pre-flight check, not a diagnosis: it verifies
+  Pod phase/Ready, as.sh, the Java pid and the telnet binary (the
+  4.0.5 as.sh prerequisite), plus a lightweight `version` attach
+  probe. It never instruments a method.
+- arthas_health_summary is a read-only composite: one call runs
+  dashboard / jvm / thread and returns a structured summary with
+  comparable fields. A single snapshot cannot prove a leak; compare
+  two summaries (heap / Old generation) before concluding one.
 - monitor/trace are time-boxed. monitor is expected to be killed by the
   timeout; its partial output is returned, not treated as a failure.
 - Outputs are truncated (8,000 chars) so a dashboard dump cannot flood
@@ -64,6 +77,29 @@ TOOLS = [
         "name": "arthas_list_pods",
         "description": "List demo pods in the demo namespace (name, phase).",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "arthas_status",
+        "description": "Pre-flight check, no instrumentation: Pod phase/Ready, as.sh "
+        "presence, Java pid, telnet binary (required by as.sh 4.0.5), "
+        "plus a lightweight 'version' attach probe. Call this before "
+        "dashboard/trace/monitor when diagnosis fails or before a demo.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"pod": {"type": "string"}},
+        },
+    },
+    {
+        "name": "arthas_health_summary",
+        "description": "Read-only composite snapshot: runs dashboard, jvm and thread "
+        "once and returns a structured summary (heap/Old/GC lines, "
+        "thread states, excerpts). No instrumentation. A single "
+        "snapshot cannot prove a memory leak: call it again later "
+        "and compare heap/Old before concluding a leak.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"pod": {"type": "string"}},
+        },
     },
     {
         "name": "arthas_dashboard",
@@ -219,6 +255,199 @@ def _arthas(pod: str, arthas_cmd: str, timeout: int, allow_partial: bool = False
     )
 
 
+def _run_rc(cmd, timeout: int):
+    """Run a kubectl command, returning (returncode, combined output).
+
+    Unlike _run, a non-zero exit is data here (e.g. pod not found),
+    not an exception, so callers can report it as a status field.
+    """
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return -1, "(timed out)"
+    return proc.returncode, _truncate(((proc.stdout or "") + (proc.stderr or "")).strip())
+
+
+def _pod_info(pod: str, ns: str) -> dict:
+    rc, out = _run_rc(
+        [KUBECTL, "-n", ns, "get", "pod", pod, "-o", "json"], timeout=30
+    )
+    if rc != 0:
+        raise ValueError(f"pod not found or not readable: {pod} in {ns}: {out}")
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        raise ValueError(f"could not parse pod info for {pod}: {out[:200]}")
+    statuses = data.get("status", {}).get("containerStatuses") or []
+    ready = sum(1 for s in statuses if s.get("ready"))
+    total = len(statuses)
+    return {
+        "phase": data.get("status", {}).get("phase", "unknown"),
+        "ready": f"{ready}/{total}" if total else "unknown",
+    }
+
+
+def _preflight(pod: str, ns: str) -> dict:
+    """Check as.sh / Java pid / telnet inside the Pod, without Arthas.
+
+    The inner script always exits 0 and prints KEY=VALUE lines, so a
+    missing tool is reported as a field, not as a kubectl failure.
+    """
+    inner = (
+        "AS=$(find /opt/arthas -name as.sh -type f | head -n 1); "
+        'echo "as.sh=${AS:-MISSING}"; '
+        'PID=$(pgrep -f "app.jar" | head -n 1); '
+        'echo "pid=${PID:-MISSING}"; '
+        'if command -v telnet >/dev/null 2>&1; then echo "telnet=ok"; '
+        'else echo "telnet=MISSING"; fi; '
+        'if command -v bash >/dev/null 2>&1; then echo "bash=ok"; '
+        'else echo "bash=MISSING"; fi'
+    )
+    rc, out = _run_rc(
+        [KUBECTL, "-n", ns, "exec", pod, "--", "bash", "-lc", inner], timeout=30
+    )
+    fields = {}
+    for line in out.splitlines():
+        if "=" in line:
+            key, _, value = line.strip().partition("=")
+            fields[key.strip()] = value.strip()
+    if rc != 0 and not fields:
+        raise ValueError(f"pre-flight exec failed for {pod}: {out}")
+    return fields
+
+
+def _status_text(pod: str, ns: str) -> str:
+    info = _pod_info(pod, ns)
+    pre = _preflight(pod, ns)
+    as_path = pre.get("as.sh", "MISSING")
+    pid = pre.get("pid", "MISSING")
+    telnet = pre.get("telnet", "MISSING")
+    problems = []
+    if info["phase"] != "Running":
+        problems.append(f"Pod phase is {info['phase']}, not Running")
+    if as_path == "MISSING":
+        problems.append("as.sh not found under /opt/arthas (business image has no Arthas tools)")
+    if pid == "MISSING":
+        problems.append("Java pid not found (no app.jar process in this Pod)")
+    if telnet == "MISSING":
+        problems.append(
+            "telnet binary missing: as.sh 4.0.5 exits 1 without it, even in "
+            "-c batch mode (business Pod is still on the pre-telnet image; "
+            "delete the business Pod so it pulls the fixed image)"
+        )
+    version_line = ""
+    if not problems or (as_path != "MISSING" and pid != "MISSING" and telnet == "ok"):
+        # Lightweight attach probe only: `version` does not instrument
+        # any method, unlike monitor/trace. Skip it when a pre-flight
+        # item is missing, because as.sh would fail the same way.
+        try:
+            version_out = _arthas(pod, "version", timeout=60, ns=ns)
+            version_line = next(
+                (ln.strip() for ln in version_out.splitlines() if ln.strip()), ""
+            )
+        except Exception as exc:  # attach failure is a status field
+            problems.append(f"Arthas attach probe (version) failed: {exc}")
+    lines = [
+        f"pod: {pod}",
+        f"namespace: {ns}",
+        f"phase: {info['phase']}",
+        f"ready: {info['ready']}",
+        f"as.sh: {as_path}",
+        f"java_pid: {pid}",
+        f"telnet: {telnet}",
+        f"arthas_version: {version_line or '(attach probe not run or failed)'}",
+        f"status: {'ok - ready to diagnose' if not problems else 'blocked'}",
+    ]
+    if problems:
+        lines.append("problems:")
+        lines.extend(f"- {p}" for p in problems)
+    return "\n".join(lines)
+
+
+def _matching_lines(text: str, keywords, max_lines: int = 12) -> list:
+    found = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if any(kw in lowered for kw in keywords):
+            if stripped not in found:
+                found.append(stripped)
+        if len(found) >= max_lines:
+            break
+    return found
+
+
+def _health_summary_text(pod: str, ns: str) -> str:
+    # Read-only only: dashboard / jvm / thread. No monitor/trace, so
+    # this call never leaves instrumentation behind and needs no reset.
+    sources = {}
+    errors = {}
+    for label, cmd in (
+        ("dashboard", "dashboard -n 1"),
+        ("jvm", "jvm"),
+        ("thread", "thread"),
+    ):
+        try:
+            sources[label] = _arthas(pod, cmd, timeout=60, ns=ns)
+        except Exception as exc:
+            errors[label] = str(exc)
+    heap_lines = []
+    for label in ("jvm", "dashboard"):
+        if label in sources:
+            heap_lines.extend(_matching_lines(
+                sources[label],
+                ("heap", "eden", "survivor", "old gen", "metaspace",
+                 "non-heap", "gc", "g1"),
+                max_lines=12,
+            ))
+    thread_text = sources.get("thread", "")
+    # Count states as whole tokens, not substrings: TIMED_WAITING must
+    # not also count as WAITING (underscore is a word character, so a
+    # word-boundary regex handles this).
+    state_counts = {}
+    for state in ("BLOCKED", "RUNNABLE", "WAITING", "TIMED_WAITING"):
+        count = len(re.findall(rf"(?<![A-Z_]){state}(?![A-Z_])", thread_text))
+        if count:
+            state_counts[state] = count
+    lines = [
+        f"pod: {pod}",
+        f"namespace: {ns}",
+        "status: " + (
+            "ok - dashboard/jvm/thread all ran"
+            if not errors
+            else "partial - failed sources: " + ", ".join(
+                f"{k} ({v[:120]})" for k, v in errors.items()
+            )
+        ),
+        "--- heap / memory (jvm + dashboard, verbatim lines) ---",
+    ]
+    lines.extend(heap_lines or ["(no heap/memory lines matched; see excerpts below)"])
+    lines.append("--- thread states (counts in raw thread output) ---")
+    if state_counts:
+        lines.extend(f"{state}: {count}" for state, count in state_counts.items())
+    else:
+        lines.append("(no thread state counts; see excerpt below)")
+    if "dashboard" in sources:
+        lines.append("--- dashboard excerpt ---")
+        lines.append(sources["dashboard"][:1500])
+    if "thread" in sources:
+        lines.append("--- thread excerpt ---")
+        lines.append(sources["thread"][:1500])
+    lines.append(
+        "--- note ---"
+    )
+    lines.append(
+        "Single snapshot only. To judge a memory leak, call "
+        "arthas_health_summary again after an interval (or after a "
+        "leak step) and compare the heap / Old-generation lines "
+        "above; a rise that does not fall after GC, with Metaspace "
+        "relatively stable, points to heap retention, not Metaspace."
+    )
+    return _truncate("\n".join(lines))
+
+
 def _call_tool(name: str, args: dict) -> str:
     # Per-call namespace (allowlist-checked) beats the server default, so
     # one server is universal across allowed namespaces. app_label only
@@ -239,6 +468,10 @@ def _call_tool(name: str, args: dict) -> str:
             for item in data.get("items", [])
         ]
         return "\n".join(lines) or "(no pods)"
+    if name == "arthas_status":
+        return _status_text(pod, ns)
+    if name == "arthas_health_summary":
+        return _health_summary_text(pod, ns)
     if name == "arthas_dashboard":
         return _arthas(pod, "dashboard -n 1", timeout=60, ns=ns)
     if name == "arthas_jvm":

@@ -190,7 +190,7 @@ curl -s -H 'Content-Type: application/json' \
      -H 'Authorization: Bearer <你在 Secret 里填的口令>' \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
      http://10.129.73.14:<上面那个 NodePort>/mcp
-# 预期：返回 7 个工具；不带口令返回 401
+# 预期：返回 9 个工具；不带口令返回 401
 ```
 
 注意：MCP 镜像是新包，第一次 Publish 之后默认是 private，跟之前业
@@ -232,8 +232,8 @@ curl -s -H 'Content-Type: application/json' \
      -H 'Authorization: Bearer <上面那个口令>' \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
      http://<局域网服务器IP>:18080/mcp
-# 预期：返回 7 个工具 arthas_list_pods / dashboard / jvm / thread /
-# monitor / trace / reset；不带口令应该返回 401
+# 预期：返回 9 个工具 arthas_list_pods / status / health_summary /
+# dashboard / jvm / thread / monitor / trace / reset；不带口令应该返回 401
 ```
 
 Agent 客户端里配远程 MCP，见 `mcp/mcp-config-remote.example.json`
@@ -258,10 +258,17 @@ MCP 工具（演示版，刻意收窄）：
 | 工具 | 用途 |
 | --- | --- |
 | arthas_list_pods | 列演示 Pod |
+| arthas_status | 预检：Pod phase/Ready、as.sh、Java PID、telnet（as.sh 4.0.5 必需）+ `version` 轻量 attach 证明，不跑插桩；诊断失败或演示前先调它 |
+| arthas_health_summary | 只读聚合：一次跑 dashboard / jvm / thread，返回堆 / Old 区 / GC 行、线程状态和摘要；单快照不能判泄漏，隔一段时间再调一次、对比堆 / Old 区 |
 | arthas_dashboard / arthas_jvm / arthas_thread | 只读快照 |
 | arthas_monitor | 方法调用量 / 成功率 / 平均耗时（限 5-30 秒） |
 | arthas_trace | 方法调用树（限 1-10 次） |
 | arthas_reset | 清插桩，trace/monitor 后必调 |
+
+注意：这两个新工具只用业务镜像里已有的 Arthas 4.0.5 命令
+（`version / dashboard / jvm / thread`），不依赖官方实验版
+Arthas MCP（4.0.5 里还没有它），所以业务镜像不用升级，
+MCP 也不用为官方 MCP 改架构。
 
 没有 ognl、redefine、retransform、heapdump、tt 回放工具，
 这是故意的。kind 默认只允许 `demo-arthas`（标签 `app=demo-service`）；
