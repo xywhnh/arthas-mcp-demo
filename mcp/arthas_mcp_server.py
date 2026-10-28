@@ -10,10 +10,19 @@ Design choices, all deliberate for a team demo:
 - Batch exec only: `kubectl exec <pod> -- bash -lc 'as.sh --select <pid> -c ...'`.
   No long-lived telnet / tunnel session to babysit.
 - Compatible with the Arthas already baked into the business image
-  (4.0.5): the only Arthas commands used are version / dashboard /
-  jvm / thread / monitor / trace / reset, all present in 4.0.5. The
-  server does NOT depend on the official (experimental, post-4.0.5)
-  Arthas MCP endpoint, so no Arthas upgrade is needed to use it.
+  (now 4.1.1, at /usr/app/tools/arthas, matching the real service):
+  the only Arthas commands used are version / dashboard / jvm /
+  thread / monitor / trace / reset, all present in 4.0.5 and 4.1.1.
+  The server does NOT depend on the official (experimental)
+  Arthas MCP endpoint, so no extra Arthas service is needed.
+- Arthas location and Java process are server-side configuration,
+  NOT per-call Agent arguments: ARTHAS_SEARCH_PATHS (colon list,
+  searched in order) and ARTHAS_JAVA_PATTERN (pgrep -f pattern).
+  The default search list covers the real-service layout first
+  (/usr/app/tools/arthas, then the .arthas copy start-arthas.sh
+  creates), then the old demo layout (/opt/arthas), so a demo
+  validated here moves to the real service by changing only the
+  MCP Deployment's environment, not the MCP code.
 - Allowlist: only namespaces in ARTHAS_ALLOWED_NAMESPACES (default:
   demo-arthas). Anything else is rejected before kubectl runs.
 - Intent-level tools, not raw Arthas passthrough: the Agent asks for
@@ -21,9 +30,11 @@ Design choices, all deliberate for a team demo:
   Arthas command line. There is intentionally NO ognl / redefine /
   retransform / heapdump / tt tool here.
 - arthas_status is a pre-flight check, not a diagnosis: it verifies
-  Pod phase/Ready, as.sh, the Java pid and the telnet binary (the
-  4.0.5 as.sh prerequisite), plus a lightweight `version` attach
-  probe. It never instruments a method.
+  Pod phase/Ready, as.sh (under ARTHAS_SEARCH_PATHS), the Java pid
+  (ARTHAS_JAVA_PATTERN) and the telnet binary (an as.sh prerequisite
+  verified on 4.0.5; on 4.1.1 it is kept as a precaution until a
+  real 4.1.1 Pod proves otherwise), plus a lightweight `version`
+  attach probe. It never instruments a method.
 - arthas_health_summary is a read-only composite: one call runs
   dashboard / jvm / thread and returns a structured summary with
   comparable fields. A single snapshot cannot prove a leak; compare
@@ -40,6 +51,12 @@ Environment:
   ARTHAS_ALLOWED_NAMESPACES  comma list, default "demo-arthas"
   ARTHAS_KUBECTL             default "kubectl"
   ARTHAS_TIMEOUT_SECONDS     default "65" (trace/monitor ceiling)
+  ARTHAS_SEARCH_PATHS        colon list, default
+                             "/usr/app/tools/arthas:/usr/app/.arthas/lib/4.1.1/arthas:/opt/arthas"
+  ARTHAS_JAVA_PATTERN        pgrep -f pattern, default "app.jar"
+                             (real service: set this to its jar / main
+                             class in the MCP Deployment; never expose
+                             it as a per-call Agent argument)
 
 Before blaming this server, run scripts/arthas.sh by hand. If that fails,
 fix Arthas attach first -- this server uses the same as.sh batch pattern.
@@ -67,6 +84,29 @@ ALLOWED = {
 }
 KUBECTL = os.environ.get("ARTHAS_KUBECTL", "kubectl")
 TIMEOUT = int(os.environ.get("ARTHAS_TIMEOUT_SECONDS", "65"))
+# Server-side only (operator-set in the MCP Deployment). The Agent
+# client never supplies these, so it cannot steer find/pgrep.
+SEARCH_PATHS = [
+    s.strip()
+    for s in os.environ.get(
+        "ARTHAS_SEARCH_PATHS",
+        "/usr/app/tools/arthas:/usr/app/.arthas/lib/4.1.1/arthas:/opt/arthas",
+    ).split(":")
+    if s.strip()
+]
+JAVA_PATTERN = os.environ.get("ARTHAS_JAVA_PATTERN", "app.jar").strip() or "app.jar"
+
+
+def _find_as() -> str:
+    """Shell fragment: find the first as.sh under SEARCH_PATHS.
+
+    Paths and the Java pattern are shlex-quoted here, so an
+    operator-set value cannot break out of the inner bash command.
+    """
+    import shlex
+
+    quoted = " ".join(shlex.quote(p) for p in SEARCH_PATHS)
+    return f"AS=$(find {quoted} -name as.sh -type f 2>/dev/null | head -n 1); "
 
 POD_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 CLASS_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_\.]*$")
@@ -81,7 +121,7 @@ TOOLS = [
     {
         "name": "arthas_status",
         "description": "Pre-flight check, no instrumentation: Pod phase/Ready, as.sh "
-        "presence, Java pid, telnet binary (required by as.sh 4.0.5), "
+        "presence, Java pid, telnet binary (as.sh prerequisite), "
         "plus a lightweight 'version' attach probe. Call this before "
         "dashboard/trace/monitor when diagnosis fails or before a demo.",
         "inputSchema": {
@@ -243,9 +283,11 @@ def _arthas(pod: str, arthas_cmd: str, timeout: int, allow_partial: bool = False
     import shlex
 
     inner = (
-        "AS=$(find /opt/arthas -name as.sh -type f | head -n 1); "
-        '[ -n "$AS" ] || { echo "as.sh not found under /opt/arthas" >&2; exit 2; }; '
-        'PID=$(pgrep -f "app.jar" | head -n 1); '
+        _find_as()
+        + '[ -n "$AS" ] || { echo "as.sh not found under '
+        + ":".join(SEARCH_PATHS)
+        + '" >&2; exit 2; }; '
+        f'PID=$(pgrep -f {shlex.quote(JAVA_PATTERN)} | head -n 1); '
         '[ -n "$PID" ] || { echo "java pid not found" >&2; exit 3; }; '
         f'"$AS" --select "$PID" -c {shlex.quote(arthas_cmd)}'
     )
@@ -293,10 +335,12 @@ def _preflight(pod: str, ns: str) -> dict:
     The inner script always exits 0 and prints KEY=VALUE lines, so a
     missing tool is reported as a field, not as a kubectl failure.
     """
+    import shlex
+
     inner = (
-        "AS=$(find /opt/arthas -name as.sh -type f | head -n 1); "
-        'echo "as.sh=${AS:-MISSING}"; '
-        'PID=$(pgrep -f "app.jar" | head -n 1); '
+        _find_as()
+        + 'echo "as.sh=${AS:-MISSING}"; '
+        f'PID=$(pgrep -f {shlex.quote(JAVA_PATTERN)} | head -n 1); '
         'echo "pid=${PID:-MISSING}"; '
         'if command -v telnet >/dev/null 2>&1; then echo "telnet=ok"; '
         'else echo "telnet=MISSING"; fi; '
@@ -326,14 +370,20 @@ def _status_text(pod: str, ns: str) -> str:
     if info["phase"] != "Running":
         problems.append(f"Pod phase is {info['phase']}, not Running")
     if as_path == "MISSING":
-        problems.append("as.sh not found under /opt/arthas (business image has no Arthas tools)")
+        problems.append(
+            f"as.sh not found under {':'.join(SEARCH_PATHS)} "
+            "(business image has no Arthas tools at the configured paths)"
+        )
     if pid == "MISSING":
-        problems.append("Java pid not found (no app.jar process in this Pod)")
+        problems.append(
+            f"Java pid not found (no process matching {JAVA_PATTERN!r} in this Pod)"
+        )
     if telnet == "MISSING":
         problems.append(
             "telnet binary missing: as.sh 4.0.5 exits 1 without it, even in "
-            "-c batch mode (business Pod is still on the pre-telnet image; "
-            "delete the business Pod so it pulls the fixed image)"
+            "-c batch mode; on 4.1.1 this is kept as a precaution until a "
+            "real 4.1.1 Pod proves otherwise (if the Pod is still on a "
+            "pre-telnet image, delete it so it pulls the fixed image)"
         )
     version_line = ""
     if not problems or (as_path != "MISSING" and pid != "MISSING" and telnet == "ok"):

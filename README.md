@@ -27,7 +27,7 @@ arthas-mcp-demo/
       order/DownstreamClient.java  # 模拟下游：getItem / getItemSlow
       fault/FaultController.java   # 仅演示用开关：/demo/faults/*
       fault/FaultState.java        # 模式 + 无界缓存（内存泄漏）
-    Dockerfile                     # JDK 17 + Arthas 4.0.5（非 JRE）
+    Dockerfile                     # JDK 17 + Arthas 4.1.1（非 JRE），布局同真实业务服务：/usr/app + /usr/app/tools/arthas
   k8s/                             # namespace / deployment(1 副本) / service
   scripts/                         # kind-up / build-and-deploy / smoke / arthas
   mcp/arthas_mcp_server.py         # 最小本地 MCP Server（Python，无外部依赖）
@@ -258,17 +258,23 @@ MCP 工具（演示版，刻意收窄）：
 | 工具 | 用途 |
 | --- | --- |
 | arthas_list_pods | 列演示 Pod |
-| arthas_status | 预检：Pod phase/Ready、as.sh、Java PID、telnet（as.sh 4.0.5 必需）+ `version` 轻量 attach 证明，不跑插桩；诊断失败或演示前先调它 |
+| arthas_status | 预检：Pod phase/Ready、as.sh（按 `ARTHAS_SEARCH_PATHS` 找）、Java PID（按 `ARTHAS_JAVA_PATTERN` 找）、telnet + `version` 轻量 attach 证明，不跑插桩；诊断失败或演示前先调它 |
 | arthas_health_summary | 只读聚合：一次跑 dashboard / jvm / thread，返回堆 / Old 区 / GC 行、线程状态和摘要；单快照不能判泄漏，隔一段时间再调一次、对比堆 / Old 区 |
 | arthas_dashboard / arthas_jvm / arthas_thread | 只读快照 |
 | arthas_monitor | 方法调用量 / 成功率 / 平均耗时（限 5-30 秒） |
 | arthas_trace | 方法调用树（限 1-10 次） |
 | arthas_reset | 清插桩，trace/monitor 后必调 |
 
-注意：这两个新工具只用业务镜像里已有的 Arthas 4.0.5 命令
+注意：这两个新工具只用业务镜像里已有的 Arthas 命令
 （`version / dashboard / jvm / thread`），不依赖官方实验版
-Arthas MCP（4.0.5 里还没有它），所以业务镜像不用升级，
-MCP 也不用为官方 MCP 改架构。
+Arthas MCP，所以业务镜像不用为 MCP 另外升级。
+业务镜像布局现在跟真实业务服务一致：应用在 `/usr/app`、
+Arthas 4.1.1 在 `/usr/app/tools/arthas`、操作脚本在
+`/usr/app/tools/start-arthas.sh`（MCP 不调它，只用 `as.sh` 批处理）。
+MCP 找 Arthas 的路径和 Java 进程名是服务端环境变量
+（`ARTHAS_SEARCH_PATHS` 默认 `/usr/app/tools/arthas:/usr/app/.arthas/lib/4.1.1/arthas:/opt/arthas`，
+`ARTHAS_JAVA_PATTERN` 默认 `app.jar`），真实服务只要在 MCP
+Deployment 里改这两个环境变量，不用改 MCP 代码。
 
 没有 ognl、redefine、retransform、heapdump、tt 回放工具，
 这是故意的。kind 默认只允许 `demo-arthas`（标签 `app=demo-service`）；
