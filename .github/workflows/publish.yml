@@ -1,0 +1,65 @@
+name: Publish
+
+# Build the demo image on GitHub and push it to GHCR, so a LAN cluster
+# can pull it without building locally. This is separate from CI:
+# CI proves the image builds and starts on kind; this job is the only
+# one that publishes an image.
+#
+# Image: ghcr.io/xywhnh/arthas-mcp-demo:0.1.0 (and :latest)
+# Platforms: linux/amd64 and linux/arm64, so both x86 and ARM nodes
+# (e.g. Oracle A1, Apple Silicon kind, ARM LAN nodes) can pull it.
+#
+# Visibility note: the first push creates the GHCR package. If the
+# package ends up private, anonymous pulls from LAN nodes will fail
+# until its visibility is changed to public in the package settings
+# (repo page -> Packages -> arthas-mcp-demo -> Package settings).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build demo-service jar
+        run: mvn -B -pl apps/demo-service -am package -DskipTests
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/demo-service
+          file: apps/demo-service/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/xywhnh/arthas-mcp-demo:0.1.0
+            ghcr.io/xywhnh/arthas-mcp-demo:latest
