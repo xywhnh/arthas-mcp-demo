@@ -46,7 +46,19 @@ jobs:
           # image to that tag so the manifest needs no CI-only fork.
           docker tag demo-service:ci demo-service:0.1.0
           kind load docker-image demo-service:0.1.0 --name arthas-demo-ci
-          kubectl apply -f k8s/
+          # NOTE: this namespace is created only in the throwaway CI kind
+          # cluster, never in a real/LAN cluster. Applying the whole k8s/
+          # directory in one batch raced namespace creation (deployment
+          # failed with "namespaces demo-arthas not found"), so create
+          # the namespace first and wait for it to be usable.
+          kubectl apply -f k8s/namespace.yaml
+          for i in $(seq 1 30); do
+            kubectl get namespace demo-arthas >/dev/null 2>&1 && break
+            sleep 2
+          done
+          sleep 5
+          kubectl get namespace demo-arthas
+          kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
           kubectl -n demo-arthas rollout status deployment/demo-service --timeout=180s
 
       - name: Smoke test (health + normal order + fault reset)

@@ -14,7 +14,15 @@ echo "== 3. Load into kind =="
 kind load docker-image demo-service:0.1.0 --name "${CLUSTER:-arthas-demo}"
 
 echo "== 4. Deploy =="
-kubectl apply -f k8s/
+# Same namespace race as CI: create the namespace first and wait for it
+# before applying Deployment/Service in the same cluster.
+kubectl apply -f k8s/namespace.yaml
+for i in $(seq 1 30); do
+  kubectl get namespace demo-arthas >/dev/null 2>&1 && break
+  sleep 2
+done
+sleep 5
+kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
 kubectl -n demo-arthas rollout status deployment/demo-service --timeout=180s
 kubectl -n demo-arthas get pods -o wide
 echo "Done. Next: scripts/smoke.sh"
