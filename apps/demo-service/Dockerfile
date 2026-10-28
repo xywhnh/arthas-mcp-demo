@@ -1,8 +1,13 @@
 # Demo image, laid out like the real business service so the MCP
 # server validated on this demo needs no re-adaptation on the real
 # service:
-#   app root: /usr/app (jar at /usr/app/app.jar)
-#   tools:    /usr/app/tools/arthas (Arthas 4.1.1, same as the real service)
+#   app root: /usr/app (jar at /usr/app/service/app.jar, as in the
+#     real service; its business port there is 8088, the demo keeps
+#     8080 on purpose -- port is not an MCP input, MCP uses exec,
+#     and changing the demo port would ripple through every k8s
+#     manifest, smoke test and README NodePort example)
+#   tools:    /usr/app/tools/arthas (Arthas 4.1.1, same as the real service;
+#     as.sh sits at the top level there, alongside arthas-boot.jar)
 #   operator script: /usr/app/tools/start-arthas.sh (same content/shape
 #     as the real service's script; MCP does not call it, it uses
 #     as.sh in batch mode directly)
@@ -41,7 +46,8 @@ RUN mkdir -p /usr/app/tools/arthas \
  && ls /usr/app/tools/arthas
 
 WORKDIR /usr/app
-COPY target/demo-service-*.jar /usr/app/app.jar
+RUN mkdir -p /usr/app/service
+COPY target/demo-service-*.jar /usr/app/service/app.jar
 COPY start-arthas.sh /usr/app/tools/start-arthas.sh
 RUN chmod +x /usr/app/tools/start-arthas.sh
 
@@ -49,4 +55,4 @@ EXPOSE 8080
 # Xmx 512m vs container limit 768Mi is deliberate: it leaves room to talk
 # about "limit vs Xmx + non-heap" without OOM-killing the demo immediately.
 # G1 is the default here; keep it explicit so the memory story is checkable.
-ENTRYPOINT ["java", "-Xms256m", "-Xmx512m", "-XX:+UseG1GC", "-jar", "/usr/app/app.jar"]
+ENTRYPOINT ["java", "-Xms256m", "-Xmx512m", "-XX:+UseG1GC", "-jar", "/usr/app/service/app.jar"]

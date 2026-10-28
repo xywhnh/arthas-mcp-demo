@@ -269,12 +269,23 @@ MCP 工具（演示版，刻意收窄）：
 （`version / dashboard / jvm / thread`），不依赖官方实验版
 Arthas MCP，所以业务镜像不用为 MCP 另外升级。
 业务镜像布局现在跟真实业务服务一致：应用在 `/usr/app`、
-Arthas 4.1.1 在 `/usr/app/tools/arthas`、操作脚本在
+jar 在 `/usr/app/service/app.jar`、Arthas 4.1.1 在
+`/usr/app/tools/arthas`（`as.sh` 就在这一层，跟
+`arthas-boot.jar` 并列）、操作脚本在
 `/usr/app/tools/start-arthas.sh`（MCP 不调它，只用 `as.sh` 批处理）。
+真实服务业务端口是 8088，demo 保持 8080 不变——端口不是 MCP
+的输入（MCP 走 exec，不走业务 HTTP 口），改 demo 端口只会
+牵连所有 k8s 清单和文档，得不偿失。
 MCP 找 Arthas 的路径和 Java 进程名是服务端环境变量
 （`ARTHAS_SEARCH_PATHS` 默认 `/usr/app/tools/arthas:/usr/app/.arthas/lib/4.1.1/arthas:/opt/arthas`，
-`ARTHAS_JAVA_PATTERN` 默认 `app.jar`），真实服务只要在 MCP
-Deployment 里改这两个环境变量，不用改 MCP 代码。
+`ARTHAS_JAVA_PATTERN` 默认 `app.jar`；真实服务进程是
+`-jar /usr/app/service/app.jar`，所以默认的 `app.jar` 已经能
+匹配，精确值 `/usr/app/service/app.jar` 更保险）。
+迁移到真实服务时，命名空间、Pod 标签、Java 进程名都只改
+MCP Deployment 里的环境变量（`ARTHAS_NAMESPACE`、
+`ARTHAS_ALLOWED_NAMESPACES`、`ARTHAS_APP_LABEL`、
+`ARTHAS_JAVA_PATTERN`），先不填真实值，等运维确认后再填，
+不用改 MCP 代码。
 
 没有 ognl、redefine、retransform、heapdump、tt 回放工具，
 这是故意的。kind 默认只允许 `demo-arthas`（标签 `app=demo-service`）；

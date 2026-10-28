@@ -1,6 +1,13 @@
 # MCP HTTP server as an independent Deployment in the EXISTING
 # namespace gzdt. It does NOT touch arthas-demo-service or any other
 # workload; it only execs into Pods in gzdt when an Agent calls it.
+# Variable points for a real service (do NOT fill real values in
+# yet): ARTHAS_NAMESPACE / ARTHAS_ALLOWED_NAMESPACES (namespace),
+# ARTHAS_APP_LABEL (Pod label value, key is 'app'), and optionally
+# ARTHAS_JAVA_PATTERN (real service: /usr/app/service/app.jar;
+# default app.jar already matches it). ARTHAS_SEARCH_PATHS needs
+# no change for the real service: its default already covers
+# /usr/app/tools/arthas first.
 # Image: ghcr.io/xywhnh/arthas-mcp-demo-mcp:0.1.0 (Docker v2, public,
 # same as the demo app image; if the package is still private after
 # the first Publish run, make it public or this Pod will ImagePullBackOff).

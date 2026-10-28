@@ -54,9 +54,14 @@ Environment:
   ARTHAS_SEARCH_PATHS        colon list, default
                              "/usr/app/tools/arthas:/usr/app/.arthas/lib/4.1.1/arthas:/opt/arthas"
   ARTHAS_JAVA_PATTERN        pgrep -f pattern, default "app.jar"
-                             (real service: set this to its jar / main
-                             class in the MCP Deployment; never expose
-                             it as a per-call Agent argument)
+                             (real service: its process is
+                             "java ... -jar /usr/app/service/app.jar",
+                             so "app.jar" already matches it; the
+                             precise value "/usr/app/service/app.jar"
+                             is safer if another app.jar ever appears
+                             in the same Pod. Set it in the MCP
+                             Deployment; never expose it as a per-call
+                             Agent argument)
 
 Before blaming this server, run scripts/arthas.sh by hand. If that fails,
 fix Arthas attach first -- this server uses the same as.sh batch pattern.
