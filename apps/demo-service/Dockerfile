@@ -4,8 +4,15 @@
 #    In production, run as the same non-root user as the Java process.
 FROM eclipse-temurin:17-jdk-jammy
 
+# telnet is REQUIRED even though MCP uses as.sh in batch mode (-c):
+# as.sh 4.0.5 checks for the telnet binary up front and exits 1 with
+# "Error: telnet is not installed" if it is missing, before it ever
+# attaches -- even though -c itself is then served by arthas-client.jar
+# (Java), not by the telnet binary. Without this package every Arthas
+# tool (dashboard/jvm/thread/monitor/trace/reset) fails the same way,
+# while list_pods (kubectl only, no as.sh) still works.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl unzip procps \
+ && apt-get install -y --no-install-recommends curl unzip procps telnet \
  && rm -rf /var/lib/apt/lists/*
 
 # Arthas 4.0.5 full package (as.sh inside). Version is pinned so the demo
