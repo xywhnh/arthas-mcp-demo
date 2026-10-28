@@ -101,9 +101,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_json(self):
+    def _read_raw(self):
+        # MUST be called for every POST, before any early return (401/404).
+        # With HTTP/1.1 keep-alive, a body left unread stays in the TCP
+        # stream and the next request on the same (pooled) connection is
+        # then parsed as "<leftover body>POST /mcp ..." -- which is exactly
+        # the "501 Unsupported method ('{...}POST')" PowerShell reported
+        # after a 401: the first 401 response had not consumed its body.
         length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length) if length else b""
+        return self.rfile.read(length) if length else b""
+
+    def _read_json(self, raw=None):
+        if raw is None:
+            raw = self._read_raw()
         return json.loads(raw.decode() or "{}")
 
     def do_GET(self):  # noqa: N802 (http.server naming)
@@ -147,12 +157,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         parsed = urlparse(self.path)
+        # Consume the body FIRST, whatever the outcome, so keep-alive
+        # connections stay in sync (see _read_raw).
+        raw = self._read_raw()
         if parsed.path == "/mcp":
             if not _check_auth(self):
                 self._send_json(401, {"error": "unauthorized"})
                 return
             try:
-                req = self._read_json()
+                req = self._read_json(raw)
             except Exception as exc:
                 self._send_json(400, {"error": f"invalid JSON: {exc}"})
                 return
@@ -176,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": "unknown session"})
                 return
             try:
-                req = self._read_json()
+                req = self._read_json(raw)
             except Exception as exc:
                 self._send_json(400, {"error": f"invalid JSON: {exc}"})
                 return
